@@ -1,0 +1,30 @@
+{
+  "target_guid": "03000000c0160000dc27000000010000",
+  "target_name_contains": "Button Box",
+  "poll_interval_ms": 5,
+  "mappings": {
+    "0": {
+      "mode": "press_release",
+      "on_press": "a",
+      "on_release": "b"
+    },
+    "1": {
+      "mode": "toggle",
+      "sequence": ["a", "b"]
+    },
+    "2": {
+      "mode": "press",
+      "key": "enter"
+    },
+    "3": {
+      "mode": "hold",
+      "key": "shift"
+    },
+    "4": {
+      "mode": "short_long_press",
+      "short_press": "f",
+      "long_press": "g",
+      "threshold_ms": 600
+    }
+  }
+}
