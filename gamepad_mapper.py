@@ -269,11 +269,15 @@ class GamepadMapper:
         self.poll_interval_ms = config.get("poll_interval_ms", 5)
 
         # State per button
+        self._pressed_buttons: set[int] = set()     # buttons currently held down
         self._toggle_indices: dict[int, int] = {}   # current sequence index for toggle mode
         self._press_times: dict[int, float] = {}    # button-down timestamp for short_long_press
         self._held_keys: dict[int, str] = {}        # currently held key for hold mode
 
     def _handle_button_down(self, button: int) -> None:
+        if button in self._pressed_buttons:
+            return
+        self._pressed_buttons.add(button)
         key = str(button)
         if key not in self.mappings:
             return
@@ -301,6 +305,9 @@ class GamepadMapper:
             self._press_times[button] = time.monotonic()
 
     def _handle_button_up(self, button: int) -> None:
+        if button not in self._pressed_buttons:
+            return
+        self._pressed_buttons.discard(button)
         key = str(button)
         if key not in self.mappings:
             return
@@ -350,6 +357,7 @@ class GamepadMapper:
             # Release any held keys before exiting
             for btn, held_key in list(self._held_keys.items()):
                 key_up(held_key)
+            self._pressed_buttons.clear()
             print("\n[RUN] Stopped.")
 
 
