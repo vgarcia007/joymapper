@@ -8,7 +8,10 @@ Each mapping mode is tested in isolation and in combination to ensure that:
   - Short/long press logic stores the timestamp on button-down and evaluates on button-up.
   - Toggle state is per-button and does not affect other buttons.
 """
+import json
+import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, patch, call
@@ -27,6 +30,11 @@ _pygame_stub.JOYBUTTONDOWN = 1
 _pygame_stub.JOYBUTTONUP = 2
 _pygame_stub.JOYAXISMOTION = 3
 _pygame_stub.JOYHATMOTION = 4
+_pygame_stub.NOFRAME = 0x00000020
+_pygame_stub.HIDDEN = 0x00000040
+_pygame_display_stub = MagicMock()
+_pygame_display_stub.get_surface.return_value = None  # no surface yet
+_pygame_stub.display = _pygame_display_stub
 sys.modules.setdefault("pygame", _pygame_stub)
 sys.modules.setdefault("keyboard", MagicMock())
 
@@ -370,6 +378,97 @@ class TestNonBlockingBehavior(unittest.TestCase):
         self.assertIn(1, mapper._pressed_buttons)
         mapper._handle_button_up(1)
         self.assertEqual(mapper._pressed_buttons, set())
+
+
+# ---------------------------------------------------------------------------
+# load_device_config – learn-mode config loading (mappings not required)
+# ---------------------------------------------------------------------------
+
+class TestLoadDeviceConfig(unittest.TestCase):
+    """Verify that load_device_config accepts configs without a 'mappings' key."""
+
+    def _write_config(self, tmp_dir: str, data: dict) -> None:
+        path = os.path.join(tmp_dir, "config.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        # Point the module at this temporary file.
+        gamepad_mapper.CONFIG_FILE = path
+
+    def tearDown(self):
+        # Reset CONFIG_FILE to its original value after each test.
+        gamepad_mapper.CONFIG_FILE = "config.json"
+
+    def test_minimal_config_with_guid_only(self):
+        """A config with only target_guid and no mappings must succeed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_config(tmp, {"target_guid": "abc123"})
+            config = gamepad_mapper.load_device_config()
+        self.assertEqual(config["target_guid"], "abc123")
+        self.assertNotIn("mappings", config)
+
+    def test_minimal_config_with_name_only(self):
+        """A config with only target_name_contains and no mappings must succeed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_config(tmp, {"target_name_contains": "Button Box"})
+            config = gamepad_mapper.load_device_config()
+        self.assertEqual(config["target_name_contains"], "Button Box")
+
+    def test_full_config_also_accepted(self):
+        """A full config (with mappings) must also be accepted by load_device_config."""
+        full = {
+            "target_guid": "abc123",
+            "mappings": {"0": {"mode": "press", "key": "a"}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_config(tmp, full)
+            config = gamepad_mapper.load_device_config()
+        self.assertIn("mappings", config)
+
+    def test_missing_device_fields_exits(self):
+        """A config with no device identification must cause sys.exit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_config(tmp, {"mappings": {}})
+            with self.assertRaises(SystemExit):
+                gamepad_mapper.load_device_config()
+
+    def test_missing_config_file_exits(self):
+        """When config.json does not exist, load_device_config must sys.exit."""
+        gamepad_mapper.CONFIG_FILE = os.path.join(
+            tempfile.gettempdir(), "nonexistent_joymapper_config.json"
+        )
+        with self.assertRaises(SystemExit):
+            gamepad_mapper.load_device_config()
+
+
+# ---------------------------------------------------------------------------
+# _init_pygame – hidden display creation for event-pump fix
+# ---------------------------------------------------------------------------
+
+class TestInitPygame(unittest.TestCase):
+    """Verify that _init_pygame creates a hidden display when none exists."""
+
+    def test_creates_display_when_no_surface_exists(self):
+        """_init_pygame must call display.set_mode when get_surface returns None."""
+        _pygame_display_stub.get_surface.return_value = None
+        _pygame_display_stub.set_mode.reset_mock()
+
+        gamepad_mapper._init_pygame()
+
+        _pygame_display_stub.set_mode.assert_called_once()
+        args = _pygame_display_stub.set_mode.call_args
+        # First positional arg must be a (1, 1) size tuple.
+        self.assertEqual(args[0][0], (1, 1))
+
+    def test_skips_display_when_surface_already_exists(self):
+        """_init_pygame must not call display.set_mode when a surface already exists."""
+        _pygame_display_stub.get_surface.return_value = MagicMock()  # surface present
+        _pygame_display_stub.set_mode.reset_mock()
+
+        gamepad_mapper._init_pygame()
+
+        _pygame_display_stub.set_mode.assert_not_called()
+        # Reset for subsequent tests
+        _pygame_display_stub.get_surface.return_value = None
 
 
 if __name__ == "__main__":

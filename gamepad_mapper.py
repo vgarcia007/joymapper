@@ -98,8 +98,8 @@ def create_default_config() -> None:
     print(f"[INFO] Created '{CONFIG_FILE}' with example configuration.")
 
 
-def load_config() -> dict:
-    """Load and return the configuration from config.json."""
+def _load_raw_config() -> dict:
+    """Read and JSON-parse config.json, exiting on any file/parse error."""
     if not os.path.exists(CONFIG_FILE):
         print(f"[ERROR] '{CONFIG_FILE}' not found. Run --init-config to create one.")
         sys.exit(1)
@@ -109,6 +109,25 @@ def load_config() -> dict:
     except json.JSONDecodeError as exc:
         print(f"[ERROR] Failed to parse '{CONFIG_FILE}': {exc}")
         sys.exit(1)
+    return config
+
+
+def load_device_config() -> dict:
+    """Load config and validate only the device-identification fields.
+
+    Used by --learn, which is run *before* mappings are known, so 'mappings'
+    is intentionally not required here.
+    """
+    config = _load_raw_config()
+    if "target_guid" not in config and "target_name_contains" not in config:
+        print("[ERROR] Config must contain 'target_guid' and/or 'target_name_contains'.")
+        sys.exit(1)
+    return config
+
+
+def load_config() -> dict:
+    """Load and return the full configuration from config.json."""
+    config = _load_raw_config()
 
     # Validate required fields
     if "target_guid" not in config and "target_name_contains" not in config:
@@ -160,9 +179,22 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 def _init_pygame() -> None:
-    """Initialize pygame and the joystick subsystem."""
+    """Initialize pygame and the joystick subsystem.
+
+    A display surface must exist on Windows so that SDL2's message pump runs
+    and joystick events are actually delivered to the event queue.  We create
+    a hidden 1×1 window to satisfy that requirement without showing any GUI.
+
+    pygame.HIDDEN (available since pygame 2.0.0) keeps the window invisible.
+    On older builds it degrades gracefully to a borderless window.
+    """
     pygame.init()
     pygame.joystick.init()
+    if not pygame.display.get_surface():
+        flags = pygame.NOFRAME
+        if hasattr(pygame, "HIDDEN"):
+            flags |= pygame.HIDDEN
+        pygame.display.set_mode((1, 1), flags)
 
 
 def list_devices() -> None:
@@ -407,7 +439,7 @@ def main() -> None:
         create_default_config()
 
     elif args.learn:
-        config = load_config()
+        config = load_device_config()
         joystick = find_target_device(config)
         if joystick is None:
             guid = config.get("target_guid", "(none)")
