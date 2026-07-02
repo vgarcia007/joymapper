@@ -139,7 +139,8 @@ def load_config() -> dict:
         sys.exit(1)
 
     # Validate each mapping entry
-    valid_modes = {"press_release", "toggle", "press", "hold", "short_long_press"}
+    valid_modes = {"press_release", "toggle", "press", "hold", "short_long_press",
+                   "press_hold_release"}
     for btn_str, mapping in config["mappings"].items():
         if not btn_str.isdigit():
             print(f"[ERROR] Mapping key '{btn_str}' is not a valid button number.")
@@ -170,6 +171,12 @@ def load_config() -> dict:
             if "short_press" not in mapping or "long_press" not in mapping:
                 print(f"[ERROR] Button {btn_str} (short_long_press): "
                       "requires 'short_press' and 'long_press'.")
+                sys.exit(1)
+        elif mode == "press_hold_release":
+            if ("on_press" not in mapping or "on_hold" not in mapping
+                    or "on_release" not in mapping):
+                print(f"[ERROR] Button {btn_str} (press_hold_release): "
+                      "requires 'on_press', 'on_hold' and 'on_release'.")
                 sys.exit(1)
 
     return config
@@ -357,6 +364,7 @@ class GamepadMapper:
         self._toggle_indices: dict[int, int] = {}   # current sequence index for toggle mode
         self._press_times: dict[int, float] = {}    # button-down timestamp for short_long_press
         self._held_keys: dict[int, str] = {}        # currently held key for hold mode
+        self._hold_deadlines: dict[int, float] = {} # press_hold_release: when on_hold fires
 
     def _handle_button_down(self, button: int) -> None:
         if button in self._pressed_buttons:
@@ -388,6 +396,23 @@ class GamepadMapper:
         elif mode == "short_long_press":
             self._press_times[button] = time.monotonic()
 
+        elif mode == "press_hold_release":
+            send_key(mapping["on_press"])
+            threshold_ms = mapping.get("threshold_ms", 500)
+            self._hold_deadlines[button] = time.monotonic() + threshold_ms / 1000.0
+
+    def _process_hold_thresholds(self) -> None:
+        """Fire on_hold keys for press_hold_release buttons whose threshold elapsed."""
+        if not self._hold_deadlines:
+            return
+        now = time.monotonic()
+        for button, deadline in list(self._hold_deadlines.items()):
+            if now >= deadline:
+                del self._hold_deadlines[button]
+                mapping = self.mappings.get(str(button))
+                if mapping is not None:
+                    send_key(mapping["on_hold"])
+
     def _handle_button_up(self, button: int) -> None:
         if button not in self._pressed_buttons:
             return
@@ -416,6 +441,14 @@ class GamepadMapper:
                 send_key(mapping["long_press"])
             else:
                 send_key(mapping["short_press"])
+            # Optional third key: always sent on release, after short/long.
+            if "on_release" in mapping:
+                send_key(mapping["on_release"])
+
+        elif mode == "press_hold_release":
+            # Cancel a pending on_hold if released before the threshold.
+            self._hold_deadlines.pop(button, None)
+            send_key(mapping["on_release"])
 
     def run(self) -> None:
         """Start the event loop. Blocks until Ctrl+C is pressed."""
@@ -455,6 +488,9 @@ class GamepadMapper:
                     elif event.type == pygame.JOYBUTTONUP:
                         if same_device:
                             self._handle_button_up(event.button)
+
+                # Fire pending on_hold keys for press_hold_release buttons.
+                self._process_hold_thresholds()
                 clock.tick(1000 / max(1, self.poll_interval_ms))
         except KeyboardInterrupt:
             # Release any held keys before exiting

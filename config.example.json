@@ -24,6 +24,14 @@
       "mode": "short_long_press",
       "short_press": "f",
       "long_press": "g",
+      "on_release": "h",
+      "threshold_ms": 600
+    },
+    "5": {
+      "mode": "press_hold_release",
+      "on_press": "a",
+      "on_hold": "b",
+      "on_release": "c",
       "threshold_ms": 600
     }
   }

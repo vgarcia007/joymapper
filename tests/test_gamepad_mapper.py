@@ -273,6 +273,42 @@ class TestShortLongPressMode(unittest.TestCase):
             mapper._handle_button_up(0)
             mock_send.assert_called_once_with("f")
 
+    def test_on_release_sent_after_short_key(self):
+        """Optional on_release key is sent after the short-press key."""
+        mapper = _make_mapper({
+            "0": {
+                "mode": "short_long_press",
+                "short_press": "f",
+                "long_press": "g",
+                "on_release": "h",
+                "threshold_ms": 500,
+            },
+        })
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.3]  # short press
+            mapper._handle_button_down(0)
+            mapper._handle_button_up(0)
+            self.assertEqual(mock_send.call_args_list, [call("f"), call("h")])
+
+    def test_on_release_sent_after_long_key(self):
+        """Optional on_release key is sent after the long-press key."""
+        mapper = _make_mapper({
+            "0": {
+                "mode": "short_long_press",
+                "short_press": "f",
+                "long_press": "g",
+                "on_release": "h",
+                "threshold_ms": 500,
+            },
+        })
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.7]  # long press
+            mapper._handle_button_down(0)
+            mapper._handle_button_up(0)
+            self.assertEqual(mock_send.call_args_list, [call("g"), call("h")])
+
     def test_two_short_long_press_buttons_have_independent_timestamps(self):
         """Pressing two short_long_press buttons does not mix their timestamps."""
         mapper = _make_mapper({
@@ -300,6 +336,62 @@ class TestShortLongPressMode(unittest.TestCase):
             mapper._handle_button_up(0)
             mapper._handle_button_up(1)
             self.assertEqual(mock_send.call_args_list, [call("g"), call("h")])
+
+
+# ---------------------------------------------------------------------------
+# press_hold_release mode
+# ---------------------------------------------------------------------------
+
+class TestPressHoldReleaseMode(unittest.TestCase):
+    def _make_mapper(self):
+        return _make_mapper({
+            "0": {
+                "mode": "press_hold_release",
+                "on_press": "a",
+                "on_hold": "b",
+                "on_release": "c",
+                "threshold_ms": 500,
+            },
+        })
+
+    def test_on_press_fires_immediately(self):
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            mapper._handle_button_down(0)
+            mock_send.assert_called_once_with("a")
+
+    def test_on_hold_fires_after_threshold_while_held(self):
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            mapper._handle_button_down(0)          # a
+            mock_time.monotonic.return_value = 0.3
+            mapper._process_hold_thresholds()      # below threshold: nothing
+            mock_time.monotonic.return_value = 0.6
+            mapper._process_hold_thresholds()      # b
+            mock_time.monotonic.return_value = 0.9
+            mapper._process_hold_thresholds()      # must not fire again
+            mock_time.monotonic.return_value = 1.0
+            mapper._handle_button_up(0)            # c
+            self.assertEqual(
+                mock_send.call_args_list,
+                [call("a"), call("b"), call("c")],
+            )
+
+    def test_release_before_threshold_skips_on_hold(self):
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            mapper._handle_button_down(0)          # a
+            mock_time.monotonic.return_value = 0.2
+            mapper._handle_button_up(0)            # c (no b)
+            mock_time.monotonic.return_value = 0.8
+            mapper._process_hold_thresholds()      # deadline cancelled: nothing
+            self.assertEqual(mock_send.call_args_list, [call("a"), call("c")])
 
 
 # ---------------------------------------------------------------------------

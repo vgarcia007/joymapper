@@ -18,6 +18,7 @@ currently active application.
   | `press` | Send a key on each button-down |
   | `hold` | Hold a key while the button is held |
   | `short_long_press` | Send different keys for short vs. long press |
+  | `press_hold_release` | Key on press, another after threshold while held, another on release |
 - Configurable poll interval and long-press threshold.
 - Graceful Ctrl+C shutdown (releases any held keys).
 
@@ -125,6 +126,10 @@ a `"mode"` and mode-specific fields:
 
 #### `press_release` – different key on down and up
 
+Sends `on_press` when the button is pressed and `on_release` when it is
+released. Useful when press and release should trigger two different actions
+(e.g. open/close a menu).
+
 ```json
 "0": {
   "mode": "press_release",
@@ -135,6 +140,10 @@ a `"mode"` and mode-specific fields:
 
 #### `toggle` – cycle through a sequence of keys
 
+Each button press sends the next key from `sequence`, wrapping around at the
+end. With `["a", "b"]` the presses produce `a`, `b`, `a`, `b`, … – handy for
+on/off style functions on a single button.
+
 ```json
 "1": {
   "mode": "toggle",
@@ -143,6 +152,9 @@ a `"mode"` and mode-specific fields:
 ```
 
 #### `press` – send a key on each button-down
+
+Sends `key` once every time the button is pressed. Releasing the button does
+nothing. The simplest mode – one button, one key.
 
 ```json
 "2": {
@@ -153,6 +165,10 @@ a `"mode"` and mode-specific fields:
 
 #### `hold` – hold a key while the button is held
 
+Presses `key` down when the button goes down and releases it when the button
+comes up – the key stays held exactly as long as the physical button
+(e.g. holding `shift` for a modifier).
+
 ```json
 "3": {
   "mode": "hold",
@@ -162,14 +178,42 @@ a `"mode"` and mode-specific fields:
 
 #### `short_long_press` – short press vs. long press
 
+The key is decided when the button is released: held shorter than
+`threshold_ms` (default `500`) sends `short_press`, held longer sends
+`long_press`. Two functions on one button.
+
 ```json
 "4": {
   "mode": "short_long_press",
   "short_press": "f",
   "long_press": "g",
+  "on_release": "h",
   "threshold_ms": 600
 }
 ```
+
+`on_release` is optional: if set, this key is sent on every button-up,
+after the short/long key.
+
+#### `press_hold_release` – key on press, after threshold, and on release
+
+Three keys on one button, driven by the hold duration:
+
+```json
+"5": {
+  "mode": "press_hold_release",
+  "on_press": "a",
+  "on_hold": "b",
+  "on_release": "c",
+  "threshold_ms": 600
+}
+```
+
+Behaviour while holding the button:
+
+1. Button down → `on_press` fires immediately.
+2. Still held after `threshold_ms` → `on_hold` fires once.
+3. Button up → `on_release` fires (whether or not `on_hold` fired).
 
 Key names follow the [`keyboard` library conventions][kb-keys] (e.g. `"a"`,
 `"enter"`, `"shift"`, `"ctrl"`, `"f1"`, `"space"`, `"left arrow"`, etc.).
