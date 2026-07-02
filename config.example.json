@@ -2,6 +2,7 @@
   "target_guid": "03000000c0160000dc27000000010000",
   "target_name_contains": "Button Box",
   "poll_interval_ms": 5,
+  "input_method": "keyboard",
   "mappings": {
     "0": {
       "mode": "press_release",

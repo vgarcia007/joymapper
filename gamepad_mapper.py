@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import ctypes
 import json
 import os
 import sys
@@ -29,12 +30,69 @@ CONFIG_FILE = "config.json"
 # Key sending helpers
 # ---------------------------------------------------------------------------
 
+# "keyboard": events via the keyboard library (works for normal applications).
+# "scancode": hardware scan codes via SendInput - required by many games that
+#             read input through DirectInput / Raw Input.
+_INPUT_METHOD = "keyboard"
+
+
+def set_input_method(method: str) -> None:
+    """Select how keys are sent: 'keyboard' (default) or 'scancode'."""
+    global _INPUT_METHOD
+    _INPUT_METHOD = method
+
+
+# --- SendInput / scan code implementation (Windows) ------------------------
+
+_KEYEVENTF_SCANCODE = 0x0008
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_EXTENDEDKEY = 0x0001
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("padding", ctypes.c_ubyte * 32)]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("union", _INPUTUNION)]
+
+
+def _send_scancode(key: str, keyup: bool) -> None:
+    """Send a key as a hardware scan code via SendInput (DirectInput games)."""
+    scan_codes = kb.key_to_scan_codes(key)
+    scan = scan_codes[0]
+    flags = _KEYEVENTF_SCANCODE
+    if scan & 0xE000 == 0xE000:
+        flags |= _KEYEVENTF_EXTENDEDKEY
+        scan &= 0xFF
+    if keyup:
+        flags |= _KEYEVENTF_KEYUP
+    inp = _INPUT(type=1)  # INPUT_KEYBOARD
+    inp.union.ki = _KEYBDINPUT(0, scan, flags, 0, None)
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+
+
 def send_key(key: str) -> None:
     """Press and immediately release a key."""
     if kb is None:
         print(f"[ERROR] 'keyboard' library not installed. Cannot send key: {key}")
         return
-    kb.send(key)
+    if _INPUT_METHOD == "scancode":
+        _send_scancode(key, keyup=False)
+        time.sleep(0.02)
+        _send_scancode(key, keyup=True)
+    else:
+        kb.send(key)
 
 
 def key_down(key: str) -> None:
@@ -42,7 +100,10 @@ def key_down(key: str) -> None:
     if kb is None:
         print(f"[ERROR] 'keyboard' library not installed. Cannot press key: {key}")
         return
-    kb.press(key)
+    if _INPUT_METHOD == "scancode":
+        _send_scancode(key, keyup=False)
+    else:
+        kb.press(key)
 
 
 def key_up(key: str) -> None:
@@ -50,7 +111,10 @@ def key_up(key: str) -> None:
     if kb is None:
         print(f"[ERROR] 'keyboard' library not installed. Cannot release key: {key}")
         return
-    kb.release(key)
+    if _INPUT_METHOD == "scancode":
+        _send_scancode(key, keyup=True)
+    else:
+        kb.release(key)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +200,12 @@ def load_config() -> dict:
         sys.exit(1)
     if "mappings" not in config or not isinstance(config["mappings"], dict):
         print("[ERROR] Config must contain a 'mappings' object.")
+        sys.exit(1)
+
+    input_method = config.get("input_method", "keyboard")
+    if input_method not in ("keyboard", "scancode"):
+        print(f"[ERROR] Unknown input_method '{input_method}'. "
+              "Valid values: keyboard, scancode")
         sys.exit(1)
 
     # Validate each mapping entry
@@ -506,6 +576,7 @@ class GamepadMapper:
 
 def run_mapper(config: dict) -> None:
     """Find the target device and start the GamepadMapper."""
+    set_input_method(config.get("input_method", "keyboard"))
     joystick = find_target_device(config)
     if joystick is None:
         guid = config.get("target_guid", "(none)")

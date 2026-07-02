@@ -249,6 +249,7 @@ button events as keyboard input.  Press **Ctrl+C** to stop.
 | `target_guid` | string | GUID of the target device (from `--list`) |
 | `target_name_contains` | string | Fallback: match any device whose name contains this substring |
 | `poll_interval_ms` | integer | Event-loop tick in milliseconds (default `5`) |
+| `input_method` | string | `keyboard` (default) or `scancode` – use `scancode` for games that ignore simulated input (DirectInput / Raw Input) |
 | `mappings` | object | Map of button number (string) → mapping object |
 
 ---
@@ -264,6 +265,12 @@ button events as keyboard input.  Press **Ctrl+C** to stop.
   keyboard events.  In those cases you may need a hardware-level HID emulator
   (e.g. vJoy + x360ce) or a different injection method (e.g. `SendInput` via
   `pywin32`).
+
+- **Keys work in Notepad but not in a game**: Most games read input via
+  DirectInput / Raw Input and ignore the default simulated events.  Set
+  `"input_method": "scancode"` in `config.json` – keys are then sent as
+  hardware scan codes via `SendInput`, which most games accept.  Also run
+  joymapper **as Administrator** if the game runs elevated.
 
 - **UAC / elevated processes**: Windows does not allow a normal-privilege
   process to send input to an elevated (Administrator) window.  If the target
