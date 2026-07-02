@@ -227,12 +227,12 @@ class TestShortLongPressMode(unittest.TestCase):
             },
         })
 
-    def test_button_down_records_timestamp_non_blocking(self):
-        """_handle_button_down must return immediately after recording the timestamp."""
+    def test_button_down_records_deadline_non_blocking(self):
+        """_handle_button_down must return immediately after recording the deadline."""
         mapper = self._make_mapper()
         # If it blocked, this call would never return.
         mapper._handle_button_down(0)
-        self.assertIn(0, mapper._press_times)
+        self.assertIn(0, mapper._long_deadlines)
 
     def test_short_press_fires_short_key(self):
         mapper = self._make_mapper()
@@ -250,6 +250,18 @@ class TestShortLongPressMode(unittest.TestCase):
             mock_time.monotonic.side_effect = [0.0, 0.6]  # 600 ms elapsed
             mapper._handle_button_down(0)
             mapper._handle_button_up(0)
+            mock_send.assert_called_once_with("g")
+
+    def test_long_press_fires_while_still_held(self):
+        """long_press fires as soon as the threshold elapses, without release."""
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.6]
+            mapper._handle_button_down(0)
+            mapper._process_hold_thresholds()  # threshold elapsed while held
+            mock_send.assert_called_once_with("g")
+            mapper._handle_button_up(0)        # releasing later fires nothing more
             mock_send.assert_called_once_with("g")
 
     def test_exactly_at_threshold_fires_long_key(self):
@@ -561,6 +573,60 @@ class TestInitPygame(unittest.TestCase):
         _pygame_display_stub.set_mode.assert_not_called()
         # Reset for subsequent tests
         _pygame_display_stub.get_surface.return_value = None
+
+
+# ---------------------------------------------------------------------------
+# Debounce – contact bounce filtering in poll()
+# ---------------------------------------------------------------------------
+
+class TestDebounce(unittest.TestCase):
+    """Contact bounce must not trigger mappings (e.g. phantom short press)."""
+
+    def _make_polling_mapper(self, mappings: dict) -> tuple:
+        joystick = MagicMock()
+        joystick.get_numbuttons.return_value = 1
+        config = {"poll_interval_ms": 5, "debounce_ms": 20, "mappings": mappings}
+        return gamepad_mapper.GamepadMapper(joystick, config), joystick
+
+    def _poll_at(self, mapper, joystick, t: float, state: int) -> None:
+        joystick.get_button.return_value = state
+        with patch.object(gamepad_mapper.time, "monotonic", return_value=t):
+            mapper.poll()
+
+    def test_bounce_is_filtered(self):
+        """A press that bounces back within debounce_ms must be ignored."""
+        mapper, joystick = self._make_polling_mapper(
+            {"0": {"mode": "press", "key": "x"}})
+        with patch.object(gamepad_mapper, "send_key") as mock_send:
+            self._poll_at(mapper, joystick, 0.000, 1)  # down candidate
+            self._poll_at(mapper, joystick, 0.005, 0)  # bounced back -> discarded
+            self._poll_at(mapper, joystick, 0.010, 0)  # stable released
+            mock_send.assert_not_called()
+
+    def test_stable_press_fires_after_debounce(self):
+        """A stable press must fire once the debounce time has elapsed."""
+        mapper, joystick = self._make_polling_mapper(
+            {"0": {"mode": "press", "key": "x"}})
+        with patch.object(gamepad_mapper, "send_key") as mock_send:
+            self._poll_at(mapper, joystick, 0.000, 1)  # candidate
+            self._poll_at(mapper, joystick, 0.010, 1)  # still < 20 ms
+            mock_send.assert_not_called()
+            self._poll_at(mapper, joystick, 0.025, 1)  # >= 20 ms -> accepted
+            mock_send.assert_called_once_with("x")
+
+    def test_bounce_does_not_fire_short_on_long_press(self):
+        """Bounce during a long press must not additionally fire the short key."""
+        mapper, joystick = self._make_polling_mapper(
+            {"0": {"mode": "short_long_press", "short_press": "s",
+                   "long_press": "l", "threshold_ms": 500}})
+        with patch.object(gamepad_mapper, "send_key") as mock_send:
+            self._poll_at(mapper, joystick, 0.000, 1)  # press candidate
+            self._poll_at(mapper, joystick, 0.025, 1)  # accepted -> button down
+            self._poll_at(mapper, joystick, 0.030, 0)  # bounce: up candidate
+            self._poll_at(mapper, joystick, 0.040, 1)  # back down -> discarded
+            self._poll_at(mapper, joystick, 0.700, 0)  # release candidate
+            self._poll_at(mapper, joystick, 0.730, 0)  # accepted -> button up
+            mock_send.assert_called_once_with("l")
 
 
 if __name__ == "__main__":

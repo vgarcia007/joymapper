@@ -5,9 +5,11 @@ Separate tool: does not modify or import gamepad_mapper.py.
 
 Features:
   - List / select connected gamepads (device GUID is stored in the config)
-  - Press a button on the device to jump to / create its mapping
+  - Press a button on ANY connected device: the device is selected
+    automatically and its mapping is created / highlighted
+  - Multiple devices per config file ('devices' list)
   - Add / edit / remove mappings for all supported modes
-  - Load and save config.json
+  - Load and save config files (legacy single-device format is auto-migrated)
 
 Usage:
   python joymapper_gui.py
@@ -18,7 +20,7 @@ import os
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -97,18 +99,26 @@ class JoymapperGUI:
                 pass
 
         self.joystick = None
-        self.prev_buttons: list[int] = []
-        self.mappings: dict[str, dict] = {}
+        self.devices: list = []
+        self.prev_states: dict[int, list[int]] = {}   # per-device button snapshots
+        self.device_entries: dict[str, dict] = {}     # guid/name -> config entry
+        self.mappings: dict[str, dict] = {}            # mappings of selected device
         self.loaded_config: dict = {}
         self.mapper_proc: subprocess.Popen | None = None
+        self.config_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
 
         self._build_widgets()
         _init_pygame()
         self._refresh_devices()
-        if os.path.exists(CONFIG_FILE):
-            self._load_config()
+        if os.path.exists(self.config_path):
+            self._load_config_file(self.config_path)
+        self._update_title()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(POLL_MS, self._poll_joystick)
+
+    def _update_title(self) -> None:
+        self.root.title(f"joymapper config editor - {os.path.basename(self.config_path)}")
 
     def _on_close(self) -> None:
         if self.mapper_proc is not None and self.mapper_proc.poll() is None:
@@ -218,13 +228,15 @@ class JoymapperGUI:
         # --- Bottom ---------------------------------------------------------
         bottom = ctk.CTkFrame(self.root, fg_color="transparent")
         bottom.grid(row=3, column=0, columnspan=2, sticky="ew", **pad)
-        self.load_btn = make_button(bottom, "Load config.json", self._load_config)
+        self.load_btn = make_button(bottom, "Load config...", self._load_config_dialog, width=110)
         self.load_btn.grid(row=0, column=0, padx=(0, 6))
-        self.save_btn = make_button(bottom, "Save config.json", self._save_config)
+        self.save_btn = make_button(bottom, "Save", self._save_config, width=80)
         self.save_btn.grid(row=0, column=1, padx=6)
+        self.save_as_btn = make_button(bottom, "Save as...", self._save_config_as, width=100)
+        self.save_as_btn.grid(row=0, column=2, padx=6)
         self.run_btn = make_button(bottom, "Start mapper", self._toggle_mapper, accent=True)
-        self.run_btn.grid(row=0, column=2, padx=6)
-        self._lockable += [self.load_btn, self.save_btn]
+        self.run_btn.grid(row=0, column=3, padx=6)
+        self._lockable += [self.load_btn, self.save_btn, self.save_as_btn]
 
         self.status_var = tk.StringVar(value="Ready.")
         self.status_label = ctk.CTkLabel(self.root, textvariable=self.status_var,
@@ -254,6 +266,7 @@ class JoymapperGUI:
     def _refresh_devices(self) -> None:
         pygame.joystick.quit()
         pygame.joystick.init()
+        self._reset_button_states()
         self.devices = []
         entries = []
         for i in range(pygame.joystick.get_count()):
@@ -279,15 +292,31 @@ class JoymapperGUI:
             return
         if 0 <= idx < len(self.devices):
             self.joystick = self.devices[idx]
-            self._snapshot_buttons()
+            self.mappings = self._device_entry(self.joystick)["mappings"]
+            self._refresh_mapping_list()
 
-    def _snapshot_buttons(self) -> None:
-        """Initialize prev_buttons from the REAL current state so that buttons
-        held right now do not register as phantom presses on the next poll."""
-        pygame.event.pump()
-        num = self.joystick.get_numbuttons()
-        self.prev_buttons = [1 if self.joystick.get_button(b) else 0
-                             for b in range(num)]
+    def _device_entry(self, joy) -> dict:
+        """Return (or create) the config entry for the given joystick."""
+        guid = joy.get_guid().lower()
+        entry = self.device_entries.get(guid)
+        if entry is not None:
+            return entry
+        # Fallback: match a loaded name-only entry.
+        name = joy.get_name().lower()
+        for e in self.device_entries.values():
+            sub = e.get("target_name_contains", "").lower()
+            if not e.get("target_guid") and sub and sub in name:
+                return e
+        entry = {"target_guid": joy.get_guid(),
+                 "target_name_contains": joy.get_name(),
+                 "mappings": {}}
+        self.device_entries[guid] = entry
+        return entry
+
+    def _reset_button_states(self) -> None:
+        """Forget polled button states; they are re-snapshotted from the REAL
+        current state on the next poll tick (avoids phantom presses)."""
+        self.prev_states = {}
 
     def _poll_joystick(self) -> None:
         if self.mapper_proc is not None:
@@ -297,21 +326,31 @@ class JoymapperGUI:
                 pygame.event.get()  # keep queue drained, ignore input
                 self.root.after(POLL_MS, self._poll_joystick)
                 return
-        if self.joystick is not None:
+        if self.devices:
             pygame.event.pump()
-            num = self.joystick.get_numbuttons()
-            if len(self.prev_buttons) != num:
-                self._snapshot_buttons()
+            event_device = None
+            event_button = None
+            for i, joy in enumerate(self.devices):
+                num = joy.get_numbuttons()
+                prev = self.prev_states.get(i)
+                if prev is None or len(prev) != num:
+                    # First tick after start/refresh: snapshot the REAL state
+                    # so already-held buttons don't fire phantom presses.
+                    self.prev_states[i] = [1 if joy.get_button(b) else 0
+                                           for b in range(num)]
+                    continue
+                for b in range(num):
+                    current = 1 if joy.get_button(b) else 0
+                    if current and not prev[b] and event_device is None:
+                        event_device, event_button = i, b
+                    prev[b] = current
 
-            pressed_now = []
-            for btn in range(num):
-                current = 1 if self.joystick.get_button(btn) else 0
-                if current and not self.prev_buttons[btn]:
-                    pressed_now.append(btn)
-                self.prev_buttons[btn] = current
-
-            if pressed_now:
-                self._focus_button_mapping(pressed_now[0])
+            if event_device is not None:
+                # Auto-select the device that sent the button press.
+                if self.devices[event_device] is not self.joystick:
+                    self.device_box.set(self.device_values[event_device])
+                    self._on_device_selected()
+                self._focus_button_mapping(event_button)
 
             pygame.event.get()  # drain queue
         self.root.after(POLL_MS, self._poll_joystick)
@@ -323,18 +362,19 @@ class JoymapperGUI:
             self.mapper_proc.terminate()
             self.status_var.set("Stopping mapper...")
             return
-        if self.mappings != self.loaded_config.get("mappings", {}):
+        if self._has_unsaved_changes():
             if messagebox.askyesno("joymapper",
-                                   "Mappings have unsaved changes.\nSave config.json first?"):
+                                   "Mappings have unsaved changes.\nSave config first?"):
                 self._save_config()
-        if not os.path.exists(CONFIG_FILE):
+        if not os.path.exists(self.config_path):
             messagebox.showwarning("joymapper",
-                                   f"{CONFIG_FILE} not found. Save the config first.")
+                                   f"{self.config_path} not found. Save the config first.")
             return
         script_dir = os.path.dirname(os.path.abspath(__file__))
         try:
             self.mapper_proc = subprocess.Popen(
-                [sys.executable, os.path.join(script_dir, "gamepad_mapper.py"), "--run"],
+                [sys.executable, os.path.join(script_dir, "gamepad_mapper.py"),
+                 "--run", "--config", self.config_path],
                 cwd=script_dir)
         except OSError as exc:
             messagebox.showerror("joymapper", f"Failed to start mapper:\n{exc}")
@@ -348,8 +388,7 @@ class JoymapperGUI:
         self.mapper_proc = None
         self.run_btn.configure(text="Start mapper")
         self._set_ui_enabled(True)
-        if self.joystick is not None:
-            self._snapshot_buttons()  # avoid phantom presses after re-enable
+        self._reset_button_states()  # avoid phantom presses after re-enable
         self.status_var.set("Mapper stopped - editing enabled.")
 
     def _set_ui_enabled(self, enabled: bool) -> None:
@@ -450,61 +489,128 @@ class JoymapperGUI:
 
     # --------------------------------------------------------------- Config
 
-    def _load_config(self) -> None:
-        if not os.path.exists(CONFIG_FILE):
-            messagebox.showinfo("joymapper", f"{CONFIG_FILE} not found.")
+    def _load_config_dialog(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load config",
+            initialdir=os.path.dirname(self.config_path),
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        self._load_config_file(path)
+
+    def _load_config_file(self, path: str) -> None:
+        if not os.path.exists(path):
+            messagebox.showinfo("joymapper", f"{path} not found.")
             return
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except json.JSONDecodeError as exc:
-            messagebox.showerror("joymapper", f"Failed to parse {CONFIG_FILE}:\n{exc}")
+            messagebox.showerror("joymapper", f"Failed to parse {path}:\n{exc}")
             return
+        self.config_path = os.path.abspath(path)
         self.loaded_config = config
-        self.mappings = dict(config.get("mappings", {}))
         self.poll_var.set(str(config.get("poll_interval_ms", 5)))
         self.input_method_var.set(config.get("input_method", "keyboard"))
-        # Try to select the configured device
-        guid = config.get("target_guid", "").lower()
+        # Build device entries (supports legacy single-device format).
+        self.device_entries = {}
+        for e in self._config_device_list(config):
+            key = (e.get("target_guid") or e.get("target_name_contains", "")).lower()
+            if not key:
+                continue
+            self.device_entries[key] = {
+                "target_guid": e.get("target_guid", ""),
+                "target_name_contains": e.get("target_name_contains", ""),
+                "mappings": dict(e.get("mappings", {})),
+            }
+        # Select the first configured device that is connected.
+        selected = False
         for i, joy in enumerate(self.devices):
-            if joy.get_guid().lower() == guid:
+            if joy.get_guid().lower() in self.device_entries:
                 self.device_box.set(self.device_values[i])
                 self._on_device_selected()
+                selected = True
                 break
+        if not selected and self.joystick is not None:
+            self.mappings = self._device_entry(self.joystick)["mappings"]
         self._refresh_mapping_list()
-        self.status_var.set(f"Loaded {CONFIG_FILE}.")
+        self._update_title()
+        self.status_var.set(f"Loaded {os.path.basename(self.config_path)}.")
+
+    @staticmethod
+    def _config_device_list(config: dict) -> list:
+        """Return the devices list; supports the legacy single-device format."""
+        if "devices" in config:
+            return list(config.get("devices") or [])
+        if config.get("target_guid") or config.get("target_name_contains"):
+            return [{"target_guid": config.get("target_guid", ""),
+                     "target_name_contains": config.get("target_name_contains", ""),
+                     "mappings": config.get("mappings", {})}]
+        return []
+
+    def _has_unsaved_changes(self) -> bool:
+        saved = {}
+        for e in self._config_device_list(self.loaded_config):
+            key = (e.get("target_guid") or e.get("target_name_contains", "")).lower()
+            if key and e.get("mappings"):
+                saved[key] = e["mappings"]
+        current = {k: e["mappings"] for k, e in self.device_entries.items()
+                   if e["mappings"]}
+        return saved != current
+
+    def _save_config_as(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save config as",
+            initialdir=os.path.dirname(self.config_path),
+            initialfile=os.path.basename(self.config_path),
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        self.config_path = os.path.abspath(path)
+        self._update_title()
+        self._save_config()
 
     def _save_config(self) -> None:
-        if self.joystick is None:
-            messagebox.showwarning("joymapper", "No device selected.")
-            return
         if not self.poll_var.get().strip().isdigit():
             messagebox.showwarning("joymapper", "Poll interval must be a number (ms).")
             return
-        incomplete = []
-        for btn in sorted(self.mappings, key=int):
-            mapping = self.mappings[btn]
-            for field, label, required in MODE_FIELDS[mapping["mode"]]:
-                if required and not mapping.get(field):
-                    incomplete.append(btn)
-                    break
+        incomplete = set()
+        labels = []
+        for key, entry in self.device_entries.items():
+            name = entry.get("target_name_contains") or key
+            for btn in sorted(entry["mappings"], key=int):
+                mapping = entry["mappings"][btn]
+                for field, label, required in MODE_FIELDS[mapping["mode"]]:
+                    if required and not mapping.get(field):
+                        incomplete.add((key, btn))
+                        labels.append(f"{name}: btn {btn}")
+                        break
         if incomplete:
             if not messagebox.askyesno(
                     "joymapper",
-                    "Mappings for button(s) " + ", ".join(incomplete)
-                    + " are incomplete and will NOT be saved.\nSave anyway?"):
+                    "These mappings are incomplete and will NOT be saved:\n"
+                    + "\n".join(labels) + "\nSave anyway?"):
                 return
-        config = dict(self.loaded_config)  # keep unknown fields
-        config["target_guid"] = self.joystick.get_guid()
-        config["target_name_contains"] = self.joystick.get_name()
+        devices = []
+        for key, entry in self.device_entries.items():
+            mappings = {b: m for b, m in entry["mappings"].items()
+                        if (key, b) not in incomplete}
+            if mappings:
+                devices.append({"target_guid": entry.get("target_guid", ""),
+                                "target_name_contains": entry.get("target_name_contains", ""),
+                                "mappings": mappings})
+        # Keep unknown top-level fields, but drop legacy single-device keys.
+        config = {k: v for k, v in self.loaded_config.items()
+                  if k not in ("target_guid", "target_name_contains",
+                               "mappings", "devices")}
         config["poll_interval_ms"] = int(self.poll_var.get().strip())
         config["input_method"] = self.input_method_var.get()
-        config["mappings"] = {k: v for k, v in self.mappings.items()
-                              if k not in set(incomplete)}
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        config["devices"] = devices
+        with open(self.config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         self.loaded_config = config
-        self.status_var.set(f"Saved {CONFIG_FILE}.")
+        self.status_var.set(f"Saved {os.path.basename(self.config_path)}.")
 
 
 def main() -> None:
