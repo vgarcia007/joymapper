@@ -26,8 +26,11 @@ currently active application.
 ## Requirements
 
 - Windows 10 / 11
-- Python 3.10 or newer
+- Python 3.10-3.13 (recommended for `pygame==2.6.1` on Windows)
 - A connected gamepad, button box, or joystick
+
+> On Python 3.14+, `pygame==2.6.1` may try to build from source and fail on
+> Windows. Use Python 3.10-3.13 for this project.
 
 ---
 

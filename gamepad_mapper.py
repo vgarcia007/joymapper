@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+import math
 
 import pygame
 
@@ -188,6 +189,10 @@ def _init_pygame() -> None:
     pygame.HIDDEN (available since pygame 2.0.0) keeps the window invisible.
     On older builds it degrades gracefully to a borderless window.
     """
+    # SDL ignores joystick input when the window has no focus - and our
+    # hidden window never gets focus. This hint must be set BEFORE
+    # pygame.init() so joystick events are delivered in the background.
+    os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
     pygame.init()
     pygame.joystick.init()
     if not pygame.display.get_surface():
@@ -261,25 +266,72 @@ def run_learn_mode(joystick) -> None:
     """
     name = joystick.get_name()
     guid = joystick.get_guid()
+    num_buttons = joystick.get_numbuttons()
+    num_axes = joystick.get_numaxes()
+    num_hats = joystick.get_numhats()
     print(f"[LEARN] Listening to: {name}  (GUID: {guid})")
+    print(f"[LEARN] Buttons reported by device: {num_buttons}")
+    print(f"[LEARN] Axes reported by device: {num_axes}")
+    print(f"[LEARN] Hats reported by device: {num_hats}")
     print("[LEARN] Press buttons on your device. Press Ctrl+C to stop.\n")
 
     clock = pygame.time.Clock()
+    last_buttons = [0] * max(0, num_buttons)
+    last_axes = [0.0] * max(0, num_axes)
+    last_hats = [(0, 0)] * max(0, num_hats)
+    instance_id = joystick.get_instance_id()
+    last_activity = time.monotonic()
+
     try:
         while True:
+            # Pump SDL once per tick so joystick state is refreshed even when
+            # JOYBUTTON events are not delivered reliably by the driver stack.
+            pygame.event.pump()
+
+            # Poll button states directly from the joystick as robust fallback.
+            for btn in range(num_buttons):
+                current = 1 if joystick.get_button(btn) else 0
+                previous = last_buttons[btn]
+                if current != previous:
+                    if current:
+                        print(f"  BUTTON DOWN  button={btn}")
+                    else:
+                        print(f"  BUTTON UP    button={btn}")
+                    last_buttons[btn] = current
+                    last_activity = time.monotonic()
+
+            # Poll axis states directly; print only meaningful changes.
+            for axis in range(num_axes):
+                current = float(joystick.get_axis(axis))
+                previous = last_axes[axis]
+                if math.fabs(current - previous) >= 0.05:
+                    print(f"  AXIS STATE   axis={axis}  value={current:.4f}")
+                    last_axes[axis] = current
+                    last_activity = time.monotonic()
+
+            # Poll hat states directly.
+            for hat in range(num_hats):
+                current = joystick.get_hat(hat)
+                previous = last_hats[hat]
+                if current != previous:
+                    print(f"  HAT STATE    hat={hat}  value={current}")
+                    last_hats[hat] = current
+                    last_activity = time.monotonic()
+
             for event in pygame.event.get():
-                if event.type == pygame.JOYBUTTONDOWN:
-                    if event.joy == joystick.get_instance_id():
-                        print(f"  BUTTON DOWN  button={event.button}")
-                elif event.type == pygame.JOYBUTTONUP:
-                    if event.joy == joystick.get_instance_id():
-                        print(f"  BUTTON UP    button={event.button}")
-                elif event.type == pygame.JOYAXISMOTION:
-                    if event.joy == joystick.get_instance_id():
-                        print(f"  AXIS MOTION  axis={event.axis}  value={event.value:.4f}")
-                elif event.type == pygame.JOYHATMOTION:
-                    if event.joy == joystick.get_instance_id():
-                        print(f"  HAT MOTION   hat={event.hat}  value={event.value}")
+                event_joy = getattr(event, "joy", None)
+                event_instance = getattr(event, "instance_id", None)
+                same_device = (event_instance == instance_id) or (event_joy == instance_id)
+                if event.type == pygame.JOYAXISMOTION and same_device:
+                    print(f"  AXIS MOTION  axis={event.axis}  value={event.value:.4f}")
+                    last_activity = time.monotonic()
+                elif event.type == pygame.JOYHATMOTION and same_device:
+                    print(f"  HAT MOTION   hat={event.hat}  value={event.value}")
+                    last_activity = time.monotonic()
+
+            if time.monotonic() - last_activity >= 5:
+                print("  [HINWEIS] Keine Eingabe erkannt. Pruefe, ob das richtige Geraet in config.json gewaehlt ist.")
+                last_activity = time.monotonic()
             clock.tick(200)
     except KeyboardInterrupt:
         print("\n[LEARN] Stopped.")
@@ -374,15 +426,34 @@ class GamepadMapper:
 
         instance_id = self.joystick.get_instance_id()
         clock = pygame.time.Clock()
+        num_buttons = self.joystick.get_numbuttons()
+        last_buttons = [0] * max(0, num_buttons)
 
         try:
             while True:
+                # Keep SDL joystick state current even if event delivery is spotty.
+                pygame.event.pump()
+
+                # Primary path: poll physical button states and detect transitions.
+                for btn in range(num_buttons):
+                    current = 1 if self.joystick.get_button(btn) else 0
+                    previous = last_buttons[btn]
+                    if current != previous:
+                        if current:
+                            self._handle_button_down(btn)
+                        else:
+                            self._handle_button_up(btn)
+                        last_buttons[btn] = current
+
                 for event in pygame.event.get():
+                    event_joy = getattr(event, "joy", None)
+                    event_instance = getattr(event, "instance_id", None)
+                    same_device = (event_instance == instance_id) or (event_joy == instance_id)
                     if event.type == pygame.JOYBUTTONDOWN:
-                        if event.joy == instance_id:
+                        if same_device:
                             self._handle_button_down(event.button)
                     elif event.type == pygame.JOYBUTTONUP:
-                        if event.joy == instance_id:
+                        if same_device:
                             self._handle_button_up(event.button)
                 clock.tick(1000 / max(1, self.poll_interval_ms))
         except KeyboardInterrupt:
