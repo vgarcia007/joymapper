@@ -1,2 +1,3 @@
 pygame==2.6.1
 keyboard==0.13.5
+customtkinter==6.0.0
