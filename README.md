@@ -57,6 +57,27 @@ pip install -r requirements.txt
 
 ---
 
+## Download (prebuilt Windows binaries)
+
+Each [GitHub release](https://github.com/vgarcia007/joymapper/releases)
+includes `joymapper-windows.zip` with two executables that must stay in the
+**same folder**:
+
+- `joymapper.exe` – the command-line mapper (`--list`, `--learn`, `--run`, …)
+- `joymapper-gui.exe` – the config editor GUI (starts/stops the mapper)
+
+Unzip the archive anywhere and run either executable. `config.json` is
+created next to the executables.
+
+> **Windows warnings are expected.** The executables are not code-signed, so
+> SmartScreen shows *"Windows protected your PC"* – click **More info →
+> Run anyway**. Some antivirus tools may also flag the download: joymapper
+> simulates keyboard input (that is its job), which matches heuristics used
+> to detect keyloggers. These are false positives; you can always audit the
+> source and build the executables yourself (`pyinstaller joymapper.spec`).
+
+---
+
 ## Quick start
 
 ### 1. List connected devices

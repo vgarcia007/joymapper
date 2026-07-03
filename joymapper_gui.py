@@ -78,6 +78,14 @@ MODE_FIELDS = {
 }
 
 
+def _app_dir() -> str:
+    """Directory of the application: the exe folder when frozen (PyInstaller),
+    otherwise the folder containing this script."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def _init_pygame() -> None:
     pygame.init()
     pygame.joystick.init()
@@ -110,8 +118,7 @@ class JoymapperGUI:
         self.mappings: dict[str, dict] = {}            # mappings of selected device
         self.loaded_config: dict = {}
         self.mapper_proc: subprocess.Popen | None = None
-        self.config_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
+        self.config_path = os.path.join(_app_dir(), CONFIG_FILE)
 
         self._build_widgets()
         _init_pygame()
@@ -375,12 +382,22 @@ class JoymapperGUI:
             messagebox.showwarning("joymapper",
                                    f"{self.config_path} not found. Save the config first.")
             return
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        app_dir = _app_dir()
+        if getattr(sys, "frozen", False):
+            # Frozen exe: launch joymapper.exe sitting next to this exe.
+            mapper_exe = os.path.join(app_dir, "joymapper.exe")
+            if not os.path.exists(mapper_exe):
+                messagebox.showerror(
+                    "joymapper",
+                    "joymapper.exe not found next to the GUI.\n"
+                    "Both files must stay in the same folder.")
+                return
+            cmd = [mapper_exe, "--run", "--config", self.config_path]
+        else:
+            cmd = [sys.executable, os.path.join(app_dir, "gamepad_mapper.py"),
+                   "--run", "--config", self.config_path]
         try:
-            self.mapper_proc = subprocess.Popen(
-                [sys.executable, os.path.join(script_dir, "gamepad_mapper.py"),
-                 "--run", "--config", self.config_path],
-                cwd=script_dir)
+            self.mapper_proc = subprocess.Popen(cmd, cwd=app_dir)
         except OSError as exc:
             messagebox.showerror("joymapper", f"Failed to start mapper:\n{exc}")
             self.mapper_proc = None
