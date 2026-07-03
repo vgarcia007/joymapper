@@ -10,7 +10,7 @@ currently active application.
 
 - Identifies the target device by **GUID** (reliable across reconnections and
   reorders) with an optional name-substring fallback.
-- Five button mapping **modes**:
+- Six button mapping **modes**:
   | Mode | Behaviour |
   |---|---|
   | `press_release` | Send one key on button-down and another on button-up |
@@ -178,9 +178,10 @@ comes up – the key stays held exactly as long as the physical button
 
 #### `short_long_press` – short press vs. long press
 
-The key is decided when the button is released: held shorter than
-`threshold_ms` (default `500`) sends `short_press`, held longer sends
-`long_press`. Two functions on one button.
+Releasing the button before `threshold_ms` (default `500`) elapses sends
+`short_press`. If the button is still held when the threshold is reached,
+`long_press` fires immediately – while the button is still down, not on
+release. Two functions on one button.
 
 ```json
 "4": {
