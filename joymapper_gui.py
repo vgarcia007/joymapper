@@ -64,6 +64,11 @@ MODE_FIELDS = {
         ("on_release", "Key on release (optional)", False),
         ("threshold_ms", "Threshold (ms)", False),
     ],
+    "short_long_press_hold": [
+        ("short_press", "Key short press", True),
+        ("long_press", "Key long press (held)", True),
+        ("threshold_ms", "Threshold (ms)", False),
+    ],
     "press_hold_release": [
         ("on_press", "Key on press", True),
         ("on_hold", "Key after threshold", True),

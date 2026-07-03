@@ -245,7 +245,7 @@ def load_config() -> dict:
 def _validate_mappings(mappings: dict) -> None:
     """Validate each mapping entry, exiting with an error message if invalid."""
     valid_modes = {"press_release", "toggle", "press", "hold", "short_long_press",
-                   "press_hold_release"}
+                   "short_long_press_hold", "press_hold_release"}
     for btn_str, mapping in mappings.items():
         if not btn_str.isdigit():
             print(f"[ERROR] Mapping key '{btn_str}' is not a valid button number.")
@@ -272,9 +272,9 @@ def _validate_mappings(mappings: dict) -> None:
             if "key" not in mapping:
                 print(f"[ERROR] Button {btn_str} (hold): requires 'key'.")
                 sys.exit(1)
-        elif mode == "short_long_press":
+        elif mode in ("short_long_press", "short_long_press_hold"):
             if "short_press" not in mapping or "long_press" not in mapping:
-                print(f"[ERROR] Button {btn_str} (short_long_press): "
+                print(f"[ERROR] Button {btn_str} ({mode}): "
                       "requires 'short_press' and 'long_press'.")
                 sys.exit(1)
         elif mode == "press_hold_release":
@@ -457,9 +457,9 @@ class GamepadMapper:
         # State per button
         self._pressed_buttons: set[int] = set()     # buttons currently held down
         self._toggle_indices: dict[int, int] = {}   # current sequence index for toggle mode
-        self._held_keys: dict[int, str] = {}        # currently held key for hold mode
+        self._held_keys: dict[int, str] = {}        # held key: hold / short_long_press_hold
         self._hold_deadlines: dict[int, float] = {} # press_hold_release: when on_hold fires
-        self._long_deadlines: dict[int, float] = {} # short_long_press: when long_press fires
+        self._long_deadlines: dict[int, float] = {} # short_long_press(_hold): when long_press fires
         self._long_fired: set[int] = set()          # buttons whose long_press already fired
         self._last_buttons: list | None = None      # polled button states (lazy init)
         self._pending: dict[int, tuple] = {}        # btn -> (state, since) debounce candidates
@@ -491,7 +491,7 @@ class GamepadMapper:
             self._held_keys[button] = k
             key_down(k)
 
-        elif mode == "short_long_press":
+        elif mode in ("short_long_press", "short_long_press_hold"):
             threshold_ms = mapping.get("threshold_ms", 500)
             self._long_deadlines[button] = time.monotonic() + threshold_ms / 1000.0
 
@@ -518,7 +518,12 @@ class GamepadMapper:
                 self._long_fired.add(button)
                 mapping = self.mappings.get(str(button))
                 if mapping is not None:
-                    send_key(mapping["long_press"])
+                    if mapping["mode"] == "short_long_press_hold":
+                        # Hold the long key until the button is released.
+                        self._held_keys[button] = mapping["long_press"]
+                        key_down(mapping["long_press"])
+                    else:
+                        send_key(mapping["long_press"])
 
     def _handle_button_up(self, button: int) -> None:
         if button not in self._pressed_buttons:
@@ -554,6 +559,24 @@ class GamepadMapper:
             # Optional third key: always sent on release, after short/long.
             if "on_release" in mapping:
                 send_key(mapping["on_release"])
+
+        elif mode == "short_long_press_hold":
+            if button in self._long_fired:
+                # long_press is currently held down - release it.
+                self._long_fired.discard(button)
+                held = self._held_keys.pop(button, None)
+                if held is not None:
+                    key_up(held)
+            else:
+                deadline = self._long_deadlines.pop(button, None)
+                if deadline is None:
+                    return
+                if time.monotonic() >= deadline:
+                    # Threshold elapsed in the same tick as the release:
+                    # press and release the long key immediately.
+                    send_key(mapping["long_press"])
+                else:
+                    send_key(mapping["short_press"])
 
         elif mode == "press_hold_release":
             # Cancel a pending on_hold if released before the threshold.

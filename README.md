@@ -10,7 +10,7 @@ currently active application.
 
 - Identifies the target device by **GUID** (reliable across reconnections and
   reorders) with an optional name-substring fallback.
-- Six button mapping **modes**:
+- Seven button mapping **modes**:
   | Mode | Behaviour |
   |---|---|
   | `press_release` | Send one key on button-down and another on button-up |
@@ -18,6 +18,7 @@ currently active application.
   | `press` | Send a key on each button-down |
   | `hold` | Hold a key while the button is held |
   | `short_long_press` | Send different keys for short vs. long press |
+  | `short_long_press_hold` | Like `short_long_press`, but the long key is held until button-up |
   | `press_hold_release` | Key on press, another after threshold while held, another on release |
 - Configurable poll interval and long-press threshold.
 - Graceful Ctrl+C shutdown (releases any held keys).
@@ -195,6 +196,23 @@ release. Two functions on one button.
 
 `on_release` is optional: if set, this key is sent on every button-up,
 after the short/long key.
+
+#### `short_long_press_hold` – short press vs. long *held* key
+
+Like `short_long_press`, but the long key is **held down** instead of tapped:
+releasing the button before `threshold_ms` (default `500`) sends
+`short_press`. If the button is still held when the threshold is reached,
+`long_press` is pressed down and stays held until the button is released
+(like `hold` with a delay).
+
+```json
+"6": {
+  "mode": "short_long_press_hold",
+  "short_press": "f",
+  "long_press": "g",
+  "threshold_ms": 600
+}
+```
 
 #### `press_hold_release` – key on press, after threshold, and on release
 

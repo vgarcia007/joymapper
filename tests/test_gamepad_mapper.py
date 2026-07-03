@@ -351,6 +351,90 @@ class TestShortLongPressMode(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# short_long_press_hold mode
+# ---------------------------------------------------------------------------
+
+class TestShortLongPressHoldMode(unittest.TestCase):
+    def _make_mapper(self):
+        return _make_mapper({
+            "0": {
+                "mode": "short_long_press_hold",
+                "short_press": "f",
+                "long_press": "g",
+                "threshold_ms": 500,
+            },
+        })
+
+    def test_short_press_fires_short_key(self):
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch.object(gamepad_mapper, "key_down") as mock_down, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.3]  # 300 ms elapsed
+            mapper._handle_button_down(0)
+            mapper._handle_button_up(0)
+            mock_send.assert_called_once_with("f")
+            mock_down.assert_not_called()
+
+    def test_long_hold_presses_key_at_threshold(self):
+        """After the threshold the long key is pressed down and stays held."""
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch.object(gamepad_mapper, "key_down") as mock_down, \
+             patch.object(gamepad_mapper, "key_up") as mock_up, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.6]
+            mapper._handle_button_down(0)
+            mapper._process_hold_thresholds()  # threshold elapsed while held
+            mock_down.assert_called_once_with("g")
+            mock_up.assert_not_called()
+            self.assertEqual(mapper._held_keys, {0: "g"})
+            mock_send.assert_not_called()
+
+    def test_long_hold_releases_key_on_button_up(self):
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch.object(gamepad_mapper, "key_down") as mock_down, \
+             patch.object(gamepad_mapper, "key_up") as mock_up, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.6]
+            mapper._handle_button_down(0)
+            mapper._process_hold_thresholds()
+            mapper._handle_button_up(0)
+            mock_down.assert_called_once_with("g")
+            mock_up.assert_called_once_with("g")
+            self.assertEqual(mapper._held_keys, {})
+            mock_send.assert_not_called()  # no short_press after a long hold
+
+    def test_threshold_elapsed_in_same_tick_taps_long_key(self):
+        """Release after the threshold but before _process_hold_thresholds ran:
+        the long key is tapped (press+release) instead of left held."""
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "send_key") as mock_send, \
+             patch.object(gamepad_mapper, "key_down") as mock_down, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.6]
+            mapper._handle_button_down(0)
+            mapper._handle_button_up(0)  # no _process_hold_thresholds in between
+            mock_send.assert_called_once_with("g")
+            mock_down.assert_not_called()
+            self.assertEqual(mapper._held_keys, {})
+
+    def test_release_held_keys_releases_long_key(self):
+        """Shutdown cleanup releases a long key that is still held."""
+        mapper = self._make_mapper()
+        with patch.object(gamepad_mapper, "key_down"), \
+             patch.object(gamepad_mapper, "key_up") as mock_up, \
+             patch("gamepad_mapper.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.6]
+            mapper._handle_button_down(0)
+            mapper._process_hold_thresholds()
+            mapper.release_held_keys()
+            mock_up.assert_called_once_with("g")
+            self.assertEqual(mapper._held_keys, {})
+
+
+# ---------------------------------------------------------------------------
 # press_hold_release mode
 # ---------------------------------------------------------------------------
 
