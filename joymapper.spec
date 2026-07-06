@@ -14,12 +14,13 @@ cli_exe = EXE(
     exclude_binaries=True,
     name='joymapper',
     console=True,
-    icon='icon.png',
+    icon='icon.ico',
 )
 
 gui_a = Analysis(
     ['joymapper_gui.py'],
-    datas=[('icon.png', '.')],  # window icon, loaded relative to __file__
+    # window/taskbar icon + footer logo, loaded relative to __file__
+    datas=[('icon.png', '.'), ('icon.ico', '.'), ('logo_small.png', '.')],
 )
 gui_pyz = PYZ(gui_a.pure)
 gui_exe = EXE(
@@ -29,7 +30,7 @@ gui_exe = EXE(
     exclude_binaries=True,
     name='joymapper-gui',
     console=False,
-    icon='icon.png',
+    icon='icon.ico',
 )
 
 coll = COLLECT(

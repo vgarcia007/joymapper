@@ -15,12 +15,15 @@ Usage:
   python joymapper_gui.py
 """
 
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+import webbrowser
+from ctypes import wintypes
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -33,15 +36,20 @@ import pygame
 CONFIG_FILE = "config.json"
 POLL_MS = 20  # tkinter after() interval for joystick polling
 
-# --- Sim-racing color scheme ---------------------------------------------
-COL_BG = "#1A1A1A"      # deep matte background
-COL_CARBON = "#2B2B2B"  # carbon shade for fields / depth
-COL_RED = "#E30613"     # racing red accent
-COL_LIGHT = "#D9D9D9"   # light gray secondary
-COL_WHITE = "#FFFFFF"   # white for clear lines
+WEBSITE_URL = "https://garcias-garage.de"
+GITHUB_URL = "https://github.com/vgarcia007/joymapper"
+
+# --- Color scheme (design tokens) -----------------------------------------
+COL_BG = "#212529"        # token: background
+COL_CARBON = "#2B3035"    # card shade (background, slightly lightened)
+COL_RED = "#B00202"       # token: primary (accents, selection)
+COL_RED_HOVER = "#D66A6B" # token: accent-1 (hover on primary elements)
+COL_DARKRED = "#6A1214"   # token: accent-2 (subtle hover, e.g. dropdowns)
+COL_LIGHT = "#D9D9D9"     # secondary text
+COL_WHITE = "#FFFFFF"     # token: text
 COL_DISABLED = "#666666"
-COL_FIELD = "#1F1F1F"   # input field background
-COL_BTN = "#3A3A3A"     # default button background
+COL_FIELD = "#000000"     # token: neutral (input field background)
+COL_BTN = "#343A40"       # default button background (derived from background)
 
 # Mode name -> list of (field, label, required)
 MODE_FIELDS = {
@@ -100,16 +108,26 @@ class JoymapperGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title("joymapper config editor")
-        root.resizable(False, False)
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
-        if os.path.exists(icon_path):
-            try:
-                self._icon = tk.PhotoImage(file=icon_path)
+        # Let the MAPPINGS card grow when the window is resized; the
+        # EDIT MAPPING column stays at its fixed size.
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(2, weight=1)
+        icon_dir = os.path.dirname(os.path.abspath(__file__))
+        ico_path = os.path.join(icon_dir, "icon.ico")
+        png_path = os.path.join(icon_dir, "icon.png")
+        try:
+            if os.path.exists(ico_path):
+                # .ico (multi-size) is what the Windows taskbar needs; a big
+                # PNG via iconphoto alone often ends up as the generic icon.
+                root.iconbitmap(default=ico_path)
+                # CTk sets its own icon ~200ms after startup - re-apply ours.
+                root.after(300, lambda: root.iconbitmap(default=ico_path))
+            elif os.path.exists(png_path):
+                self._icon = tk.PhotoImage(file=png_path)
                 root.iconphoto(True, self._icon)
-                # CTk may set its own icon shortly after startup - re-apply ours.
                 root.after(300, lambda: root.iconphoto(True, self._icon))
-            except tk.TclError:
-                pass
+        except tk.TclError:
+            pass
 
         self.joystick = None
         self.devices: list = []
@@ -121,13 +139,59 @@ class JoymapperGUI:
         self.config_path = os.path.join(_app_dir(), CONFIG_FILE)
 
         self._build_widgets()
+        # Don't allow shrinking below the initial layout size.
+        root.update_idletasks()
+        root.minsize(root.winfo_reqwidth(), root.winfo_reqheight())
         _init_pygame()
         self._refresh_devices()
         if os.path.exists(self.config_path):
             self._load_config_file(self.config_path)
         self._update_title()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._in_size_move = False
+        self._install_move_hook()
         self.root.after(POLL_MS, self._poll_joystick)
+
+    def _install_move_hook(self) -> None:
+        """Pause joystick polling while the window is dragged or resized.
+
+        SDL's event pump (pygame.event.pump/get) processes the message queue
+        of the WHOLE thread - including messages that belong to the native
+        Win32 move loop of the Tk window. That steals mouse messages and
+        aborts dragging. Windows signals the move loop via WM_ENTERSIZEMOVE /
+        WM_EXITSIZEMOVE, which we intercept by subclassing the window proc."""
+        WM_ENTERSIZEMOVE = 0x0231
+        WM_EXITSIZEMOVE = 0x0232
+        GWL_WNDPROC = -4
+        GA_ROOT = 2
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
+                                     wintypes.WPARAM, wintypes.LPARAM)
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.root.winfo_id(), GA_ROOT)
+            set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+            set_long.restype = ctypes.c_void_p
+            set_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+            call_proc = user32.CallWindowProcW
+            call_proc.restype = LRESULT
+            call_proc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT,
+                                  wintypes.WPARAM, wintypes.LPARAM]
+
+            def wndproc(h, msg, wparam, lparam):
+                if msg == WM_ENTERSIZEMOVE:
+                    self._in_size_move = True
+                elif msg == WM_EXITSIZEMOVE:
+                    self._in_size_move = False
+                    self._reset_button_states()  # skipped ticks -> re-snapshot
+                return call_proc(self._orig_wndproc, h, msg, wparam, lparam)
+
+            self._wndproc_ref = WNDPROC(wndproc)  # keep a reference (GC!)
+            self._orig_wndproc = set_long(
+                hwnd, GWL_WNDPROC,
+                ctypes.cast(self._wndproc_ref, ctypes.c_void_p).value)
+        except (AttributeError, OSError):
+            pass  # non-Windows / unexpected failure: polling just stays active
 
     def _update_title(self) -> None:
         self.root.title(f"joymapper config editor - {os.path.basename(self.config_path)}")
@@ -161,15 +225,15 @@ class JoymapperGUI:
         def make_combo(parent, width, **kwargs):
             return ctk.CTkComboBox(parent, width=width, state="readonly",
                                    fg_color=COL_FIELD, border_color=COL_BTN,
-                                   button_color=COL_BTN, button_hover_color=COL_RED,
+                                   button_color=COL_BTN, button_hover_color=COL_RED_HOVER,
                                    dropdown_fg_color=COL_CARBON,
-                                   dropdown_hover_color=COL_RED,
+                                   dropdown_hover_color=COL_DARKRED,
                                    text_color=COL_WHITE, **kwargs)
 
         def make_button(parent, text, command, width=140, accent=False):
             return ctk.CTkButton(parent, text=text, command=command, width=width,
                                  fg_color=COL_RED if accent else COL_BTN,
-                                 hover_color="#FF1E2D" if accent else COL_RED,
+                                 hover_color=COL_RED_HOVER if accent else COL_RED,
                                  text_color=COL_WHITE)
 
         # --- Device -----------------------------------------------------
@@ -199,21 +263,38 @@ class JoymapperGUI:
 
         # --- Mapping list --------------------------------------------------
         left = card(2, 0, "MAPPINGS", sticky="nsew")
-        self.mapping_list = tk.Listbox(left, width=44, height=15,
-                                       bg=COL_FIELD, fg=COL_LIGHT,
-                                       selectbackground=COL_RED,
-                                       selectforeground=COL_WHITE,
-                                       disabledforeground=COL_DISABLED,
-                                       highlightthickness=0, relief="flat",
-                                       font=("Segoe UI", 9))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+        style = ttk.Style(self.root)
+        style.theme_use("clam")  # required so background/fieldbackground apply
+        style.configure("Mappings.Treeview", background=COL_FIELD,
+                        fieldbackground=COL_FIELD, foreground=COL_LIGHT,
+                        borderwidth=0, rowheight=22, font=("Segoe UI", 9))
+        style.configure("Mappings.Treeview.Heading", background=COL_BTN,
+                        foreground=COL_WHITE, borderwidth=0,
+                        font=("Segoe UI", 9, "bold"))
+        style.map("Mappings.Treeview",
+                  background=[("selected", COL_RED)],
+                  foreground=[("selected", COL_WHITE)])
+        style.map("Mappings.Treeview.Heading", background=[("active", COL_BTN)])
+        self.mapping_list = ttk.Treeview(left, columns=("button", "mode", "keys"),
+                                         show="headings", height=15,
+                                         style="Mappings.Treeview",
+                                         selectmode="browse")
+        self.mapping_list.heading("button", text="Button", anchor="center")
+        self.mapping_list.heading("mode", text="Mode", anchor="w")
+        self.mapping_list.heading("keys", text="Keys", anchor="w")
+        self.mapping_list.column("button", width=60, anchor="center", stretch=False)
+        self.mapping_list.column("mode", width=150, stretch=False)
+        self.mapping_list.column("keys", width=220, stretch=True)
         self.mapping_list.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
-        self.mapping_list.bind("<<ListboxSelect>>", self._on_mapping_selected)
+        self.mapping_list.bind("<<TreeviewSelect>>", self._on_mapping_selected)
         self.remove_btn = make_button(left, "Remove selected", self._remove_mapping)
         self.remove_btn.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
         self._lockable += [self.mapping_list, self.remove_btn]
 
         # --- Editor --------------------------------------------------------
-        right = card(2, 1, "EDIT MAPPING", sticky="nsew")
+        right = card(2, 1, "EDIT MAPPING", sticky="new")
         ctk.CTkLabel(right, text="Button number:").grid(row=1, column=0, sticky="w", padx=12, pady=4)
         self.button_var = tk.StringVar()
         self.button_entry = make_entry(right, self.button_var, 60)
@@ -252,9 +333,33 @@ class JoymapperGUI:
 
         self.status_var = tk.StringVar(value="Ready.")
         self.status_label = ctk.CTkLabel(self.root, textvariable=self.status_var,
-                                         anchor="w", fg_color=COL_CARBON,
+                                         anchor="center", fg_color=COL_CARBON,
                                          text_color=COL_LIGHT, corner_radius=0)
         self.status_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        # --- Footer: logo + links ---------------------------------------
+        footer = ctk.CTkFrame(self.root, fg_color=COL_FIELD, corner_radius=0)
+        footer.grid(row=5, column=0, columnspan=2, sticky="ew")
+        footer.grid_columnconfigure(1, weight=1)
+
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "logo_small.png")
+        if os.path.exists(logo_path):
+            try:
+                self._logo = tk.PhotoImage(file=logo_path)
+                tk.Label(footer, image=self._logo, bg=COL_FIELD, bd=0)\
+                    .grid(row=0, column=0, sticky="w", padx=10, pady=4)
+            except tk.TclError:
+                pass
+
+        def make_link(text, url, column):
+            link = ctk.CTkLabel(footer, text=text, text_color=COL_RED,
+                                cursor="hand2", font=ctk.CTkFont(size=11, underline=True))
+            link.grid(row=0, column=column, sticky="e", padx=(12, 10), pady=4)
+            link.bind("<Button-1>", lambda _e: webbrowser.open(url))
+
+        make_link("garcias-garage.de", WEBSITE_URL, 2)
+        make_link("GitHub", GITHUB_URL, 3)
 
     def _rebuild_fields(self) -> None:
         for child in self.fields_frame.winfo_children():
@@ -331,6 +436,11 @@ class JoymapperGUI:
         self.prev_states = {}
 
     def _poll_joystick(self) -> None:
+        if self._in_size_move:
+            # Window is being dragged/resized: pumping SDL events now would
+            # abort the native move loop. Skip this tick entirely.
+            self.root.after(POLL_MS, self._poll_joystick)
+            return
         if self.mapper_proc is not None:
             if self.mapper_proc.poll() is not None:
                 self._on_mapper_stopped()
@@ -416,7 +526,9 @@ class JoymapperGUI:
     def _set_ui_enabled(self, enabled: bool) -> None:
         for widget in self._lockable + self._field_entries:
             try:
-                if isinstance(widget, ctk.CTkComboBox):
+                if isinstance(widget, ttk.Treeview):
+                    widget.configure(selectmode="browse" if enabled else "none")
+                elif isinstance(widget, ctk.CTkComboBox):
                     widget.configure(state="readonly" if enabled else "disabled")
                 else:
                     widget.configure(state="normal" if enabled else "disabled")
@@ -440,11 +552,9 @@ class JoymapperGUI:
         self.status_var.set(status)
 
     def _select_mapping_in_list(self, key: str) -> None:
-        keys = sorted(self.mappings, key=int)
-        idx = keys.index(key)
-        self.mapping_list.selection_clear(0, tk.END)
-        self.mapping_list.selection_set(idx)
-        self.mapping_list.see(idx)
+        if self.mapping_list.exists(key):
+            self.mapping_list.selection_set(key)
+            self.mapping_list.see(key)
 
     def _load_mapping_into_editor(self, key: str) -> None:
         mapping = self.mappings.get(key)
@@ -487,27 +597,46 @@ class JoymapperGUI:
         self.status_var.set(f"Mapping for button {btn} saved.")
 
     def _remove_mapping(self) -> None:
-        selection = self.mapping_list.curselection()
+        selection = self.mapping_list.selection()
         if not selection:
             return
-        btn = self.mapping_list.get(selection[0]).split(":")[0].replace("btn", "").strip()
+        btn = selection[0]
         self.mappings.pop(btn, None)
         self._refresh_mapping_list()
         self.status_var.set(f"Mapping for button {btn} removed.")
 
+    @staticmethod
+    def _mapping_keys_text(mapping: dict) -> str:
+        """Compact, human-readable summary of a mapping's keys for the table."""
+        parts = []
+        for field, _label, _required in MODE_FIELDS.get(mapping["mode"], []):
+            if field == "threshold_ms":
+                continue
+            value = mapping.get(field)
+            if not value:
+                continue
+            if isinstance(value, list):
+                value = ", ".join(value)
+            parts.append(str(value))
+        text = " / ".join(parts)
+        threshold = mapping.get("threshold_ms")
+        if threshold:
+            text += f"  ({threshold} ms)"
+        return text
+
     def _refresh_mapping_list(self) -> None:
-        self.mapping_list.delete(0, tk.END)
+        self.mapping_list.delete(*self.mapping_list.get_children())
         for btn in sorted(self.mappings, key=int):
             mapping = self.mappings[btn]
-            details = {k: v for k, v in mapping.items() if k != "mode"}
-            self.mapping_list.insert(tk.END, f"btn {btn}: {mapping['mode']}  {details}")
+            self.mapping_list.insert("", "end", iid=btn,
+                                     values=(btn, mapping["mode"],
+                                             self._mapping_keys_text(mapping)))
 
     def _on_mapping_selected(self, _event=None) -> None:
-        selection = self.mapping_list.curselection()
+        selection = self.mapping_list.selection()
         if not selection:
             return
-        btn = self.mapping_list.get(selection[0]).split(":")[0].replace("btn", "").strip()
-        self._load_mapping_into_editor(btn)
+        self._load_mapping_into_editor(selection[0])
 
     # --------------------------------------------------------------- Config
 

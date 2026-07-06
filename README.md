@@ -1,8 +1,20 @@
 # joymapper
 
-A small Windows command-line tool written in Python that reads inputs from a
+A small Windows command-line tool (with optional GUI) written in Python that reads inputs from a
 specific gamepad or button box and sends keyboard events to Windows or the
 currently active application.
+
+**Why yet another tool** that maps joystick buttons to keyboard inputs?
+Because I couldn't find one that does exactly what I want. joymapper supports
+seven different mapping modes (more on that below).
+
+I am a software developer, but for this tool I went all-in on AI, used in a
+deliberate and targeted way. This is not AI slop — it is exactly what I wanted.
+
+**Download:** Grab the latest prebuilt Windows binaries from the
+[GitHub releases](https://github.com/vgarcia007/joymapper/releases) —
+no Python required. See [Download](#download-prebuilt-windows-binaries)
+for details.
 
 ---
 
@@ -65,6 +77,8 @@ includes `joymapper-windows.zip` with two executables that must stay in the
 
 - `joymapper.exe` – the command-line mapper (`--list`, `--learn`, `--run`, …)
 - `joymapper-gui.exe` – the config editor GUI (starts/stops the mapper)
+
+![joymapper config editor GUI](docs/Screenshot-GUI-01.png)
 
 Unzip the archive anywhere and run either executable. `config.json` is
 created next to the executables.
