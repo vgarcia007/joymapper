@@ -97,3 +97,16 @@ Format: date — task — changed files — key context.
   `selectmode="none"`).
 - **Context:** ttk widgets need `theme_use("clam")` for background colors to
   apply on Windows. Needs manual UI check.
+
+## 2026-07-06 — README restructured (GUI-first)
+
+- **Task:** README now leads with the GUI: intro rewritten (GUI does the work,
+  CLI for purists), download paragraph + release link in the intro, GUI
+  screenshot in the download section, new "Quick start (GUI)" section
+  (5 steps + multi-device/config hints), features list starts with the GUI.
+  Requirements/installation-from-source moved into "Using the command line",
+  which wraps the old CLI quick start (steps 1–6, mode docs unchanged).
+- **Changed files:** `README.md`.
+- **Context:** Anchor links used: #5-configure-mappings, #windows-caveats,
+  #download-prebuilt-windows-binaries — keep them stable when renaming
+  headings.

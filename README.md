@@ -1,8 +1,10 @@
 # joymapper
 
-A small Windows command-line tool (with optional GUI) written in Python that reads inputs from a
-specific gamepad or button box and sends keyboard events to Windows or the
-currently active application.
+A small Windows tool that reads inputs from a specific gamepad or button box
+and sends keyboard events to Windows or the currently active application.
+The included **GUI does all the work for you** — press a button on your
+device, pick a mode and keys, save, start the mapper. Done. For purists,
+the whole thing can also be driven as a **pure command-line tool**.
 
 **Why yet another tool** that maps joystick buttons to keyboard inputs?
 Because I couldn't find one that does exactly what I want. joymapper supports
@@ -20,8 +22,12 @@ for details.
 
 ## Features
 
+- **GUI config editor**: press a button on any connected device and the GUI
+  selects the device and creates the mapping for you; also starts/stops the
+  mapper. No JSON editing required.
 - Identifies the target device by **GUID** (reliable across reconnections and
   reorders) with an optional name-substring fallback.
+- Multiple devices per config.
 - Seven button mapping **modes**:
   | Mode | Behaviour |
   |---|---|
@@ -34,38 +40,6 @@ for details.
   | `press_hold_release` | Key on press, another after threshold while held, another on release |
 - Configurable poll interval and long-press threshold.
 - Graceful Ctrl+C shutdown (releases any held keys).
-
----
-
-## Requirements
-
-- Windows 10 / 11
-- Python 3.10-3.13 (recommended for `pygame==2.6.1` on Windows)
-- A connected gamepad, button box, or joystick
-
-> On Python 3.14+, `pygame==2.6.1` may try to build from source and fail on
-> Windows. Use Python 3.10-3.13 for this project.
-
----
-
-## Installation
-
-```bash
-# 1. Clone or download the repository
-git clone https://github.com/vgarcia007/joymapper.git
-cd joymapper
-
-# 2. (Recommended) Create a virtual environment
-python -m venv .venv
-.venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-```
-
-> **Note:** The `keyboard` library sends low-level keyboard events and may
-> require **administrator rights** on some Windows configurations.  
-> Run your terminal as Administrator if keys are not being received.
 
 ---
 
@@ -92,7 +66,63 @@ created next to the executables.
 
 ---
 
-## Quick start
+## Quick start (GUI)
+
+1. Download and unzip the release, then run **`joymapper-gui.exe`**
+   (keep both executables in the same folder).
+2. **Press a button on your device** – the GUI automatically selects the
+   device and creates (or highlights) the mapping for that button.
+3. Pick a **mode**, fill in the key fields and click **Add / update mapping**.
+   The seven modes are explained under
+   [Configure mappings](#5-configure-mappings); key names follow the
+   [`keyboard` library conventions][kb-keys].
+4. Optional: adjust the poll interval, or set **Input method** to `scancode`
+   if your game ignores the simulated keys (see
+   [Windows caveats](#windows-caveats)).
+5. **Save**, then click **Start mapper**. Editing is locked while the mapper
+   runs – click **Stop mapper** to make changes.
+
+You can map several devices in one config: just press a button on another
+connected device. **Load config... / Save as...** let you manage multiple
+config files (the CLI accepts them via `--config`).
+
+---
+
+## Using the command line
+
+Everything the GUI does can also be done by hand: a couple of CLI commands
+plus a `config.json` you edit yourself.
+
+### Requirements (running from source)
+
+- Windows 10 / 11
+- Python 3.10-3.13 (recommended for `pygame==2.6.1` on Windows)
+- A connected gamepad, button box, or joystick
+
+> On Python 3.14+, `pygame==2.6.1` may try to build from source and fail on
+> Windows. Use Python 3.10-3.13 for this project.
+
+### Installation (from source)
+
+```bash
+# 1. Clone or download the repository
+git clone https://github.com/vgarcia007/joymapper.git
+cd joymapper
+
+# 2. (Recommended) Create a virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+```
+
+> **Note:** The `keyboard` library sends low-level keyboard events and may
+> require **administrator rights** on some Windows configurations.  
+> Run your terminal as Administrator if keys are not being received.
+
+With the prebuilt binaries, replace `python gamepad_mapper.py` with
+`joymapper.exe` in the commands below.
 
 ### 1. List connected devices
 
